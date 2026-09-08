@@ -12,6 +12,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Bros Coffee">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@500;600&display=swap');
 
@@ -286,6 +287,21 @@
   .paybreak-fill{height:100%;background:var(--accent);border-radius:6px;}
   .paybreak-meta{font-size:11px;color:var(--ink-muted);margin-top:5px;}
 
+  .export-btn{
+    background:var(--accent);color:var(--accent-ink);border:none;
+    border-radius:10px;padding:8px 14px;font-size:12.5px;font-weight:700;
+    font-family:inherit;cursor:pointer;
+  }
+  .exprow{
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:11px 12px;margin-top:8px;display:flex;align-items:center;gap:10px;
+  }
+  .exprow .einfo{flex:1;}
+  .exprow .ename{font-size:14px;font-weight:700;}
+  .exprow .emeta{font-size:12px;color:var(--ink-muted);margin-top:2px;}
+  .exprow .eamt{font-size:14px;font-weight:700;color:var(--danger);}
+
+
   .empty{
     text-align:center;color:var(--ink-muted);font-size:13px;padding:40px 20px;
   }
@@ -345,7 +361,10 @@
 
   <!-- 報表 -->
   <section class="screen" id="screen-reports">
-    <div class="section-title">今日營運</div>
+    <div class="row" style="margin-top:8px;">
+      <div class="section-title" style="margin:0;">今日營運</div>
+      <button class="export-btn" onclick="exportExcel()">匯出 Excel</button>
+    </div>
     <div class="statcards" id="todayStats"></div>
 
     <div class="section-title">今日各付款方式</div>
@@ -353,6 +372,12 @@
 
     <div class="section-title">累計各付款方式（全部紀錄）</div>
     <div id="allPayBreakdown"></div>
+
+    <div class="row" style="margin-top:16px;">
+      <div class="section-title" style="margin:0;">支出</div>
+      <button class="iconbtn" onclick="openExpenseForm()">＋</button>
+    </div>
+    <div id="expenseList"></div>
 
     <div class="section-title">交易紀錄</div>
     <div id="salesList"></div>
@@ -440,11 +465,25 @@
   <button class="btn-primary" onclick="closeAllSheets()">完成</button>
 </div>
 
+<!-- expense form sheet -->
+<div class="sheet" id="expenseSheet">
+  <div class="sheet-handle"></div>
+  <h3 id="eFormTitle">新增支出</h3>
+  <input type="text" id="eFormId" style="display:none;">
+  <div class="field"><label>項目名稱</label><input type="text" id="eFormName" placeholder="例如：牛奶進貨"></div>
+  <div class="field"><label>金額（元）</label><input type="number" id="eFormAmount" min="0" placeholder="0"></div>
+  <div class="field"><label>分類</label><input type="text" id="eFormCat" placeholder="例如：進貨、水電、房租（選填）"></div>
+  <div class="field"><label>日期</label><input type="date" id="eFormDate"></div>
+  <button class="btn-primary" onclick="saveExpenseForm()">儲存支出</button>
+  <button class="btn-ghost" onclick="closeAllSheets()">取消</button>
+</div>
+
 <div id="toast"></div>
 
 <script>
 let products = [];
 let sales = [];
+let expenses = [];
 let cart = {}; // productId -> qty
 let discType = 'percent';
 let payMethod = '現金';
@@ -452,6 +491,7 @@ let lastReceiptText = '';
 
 const STORAGE_KEY_PRODUCTS = 'pos:products';
 const STORAGE_KEY_SALES = 'pos:sales';
+const STORAGE_KEY_EXPENSES = 'pos:expenses';
 
 const seedProducts = [
   {id:'p1', name:'美式咖啡', cat:'黑咖啡', price:60, stock:30},
@@ -460,6 +500,7 @@ const seedProducts = [
   {id:'p4', name:'摩卡', cat:'奶咖', price:85, stock:20},
   {id:'p5', name:'手沖單品', cat:'黑咖啡', price:120, stock:15},
   {id:'p6', name:'冰滴咖啡', cat:'黑咖啡', price:95, stock:0},
+  {id:'p7', name:'VV特調西西里', cat:'特調咖啡', price:115, stock:10},
 ];
 
 async function loadData(){
@@ -474,6 +515,11 @@ async function loadData(){
     sales = raw ? JSON.parse(raw) : [];
   }catch(e){ sales = []; }
 
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY_EXPENSES);
+    expenses = raw ? JSON.parse(raw) : [];
+  }catch(e){ expenses = []; }
+
   await saveProducts();
   renderAll();
 }
@@ -485,6 +531,10 @@ async function saveProducts(){
 async function saveSales(){
   try{ localStorage.setItem(STORAGE_KEY_SALES, JSON.stringify(sales)); }
   catch(e){ console.error('save sales failed', e); showToast('儲存失敗,裝置空間可能不足'); }
+}
+async function saveExpenses(){
+  try{ localStorage.setItem(STORAGE_KEY_EXPENSES, JSON.stringify(expenses)); }
+  catch(e){ console.error('save expenses failed', e); showToast('儲存失敗,裝置空間可能不足'); }
 }
 
 function fmt(n){ return '$' + Math.round(n).toLocaleString(); }
@@ -775,15 +825,21 @@ async function deleteProduct(id){
 function renderReports(){
   const today = new Date().toDateString();
   const todaySales = sales.filter(s=> new Date(s.time).toDateString()===today);
+  const todayExpenses = expenses.filter(e=> new Date(e.date).toDateString()===today);
   const revenue = todaySales.reduce((s,x)=>s+x.total,0);
+  const expenseTotal = todayExpenses.reduce((s,x)=>s+x.amount,0);
+  const profit = revenue - expenseTotal;
 
   document.getElementById('todayStats').innerHTML = `
     <div class="statcard"><div class="v mono">${fmt(revenue)}</div><div class="l">今日營收</div></div>
     <div class="statcard"><div class="v mono">${todaySales.length}</div><div class="l">今日訂單數</div></div>
+    <div class="statcard"><div class="v mono" style="color:var(--danger);">${fmt(expenseTotal)}</div><div class="l">今日支出</div></div>
+    <div class="statcard"><div class="v mono" style="color:${profit>=0?'var(--ok)':'var(--danger)'};">${fmt(profit)}</div><div class="l">今日淨利</div></div>
   `;
 
   renderPayBreakdown('todayPayBreakdown', todaySales);
   renderPayBreakdown('allPayBreakdown', sales);
+  renderExpenseList();
 
   const list = document.getElementById('salesList');
   if(sales.length===0){
@@ -801,6 +857,58 @@ function renderReports(){
       </div>
     `;
   }).join('');
+}
+
+/* ---------- expenses ---------- */
+function renderExpenseList(){
+  const wrap = document.getElementById('expenseList');
+  if(expenses.length===0){
+    wrap.innerHTML = '<div class="empty" style="padding:16px 0;">還沒有任何支出紀錄</div>';
+    return;
+  }
+  const sorted = [...expenses].sort((a,b)=> new Date(b.date)-new Date(a.date));
+  wrap.innerHTML = sorted.slice(0,50).map(e=>`
+    <div class="exprow">
+      <div class="einfo">
+        <div class="ename">${e.name}</div>
+        <div class="emeta">${e.date}${e.cat?' · '+e.cat:''}</div>
+      </div>
+      <div class="eamt mono">-${fmt(e.amount)}</div>
+      <button class="iconbtn" onclick="deleteExpense('${e.id}')">🗑</button>
+    </div>
+  `).join('');
+}
+
+function openExpenseForm(){
+  document.getElementById('eFormId').value='';
+  document.getElementById('eFormName').value='';
+  document.getElementById('eFormAmount').value='';
+  document.getElementById('eFormCat').value='';
+  document.getElementById('eFormDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('eFormTitle').textContent='新增支出';
+  openSheet('expenseSheet');
+}
+
+async function saveExpenseForm(){
+  const name = document.getElementById('eFormName').value.trim();
+  const amount = parseFloat(document.getElementById('eFormAmount').value)||0;
+  const cat = document.getElementById('eFormCat').value.trim();
+  const date = document.getElementById('eFormDate').value || new Date().toISOString().slice(0,10);
+  if(!name){ showToast('請輸入項目名稱'); return; }
+  if(amount<=0){ showToast('請輸入正確金額'); return; }
+
+  expenses.unshift({ id:'E'+Date.now(), name, amount, cat, date });
+  await saveExpenses();
+  renderReports();
+  closeAllSheets();
+  showToast('支出已新增');
+}
+
+async function deleteExpense(id){
+  if(!confirm('確定要刪除這筆支出嗎？')) return;
+  expenses = expenses.filter(x=>x.id!==id);
+  await saveExpenses();
+  renderReports();
 }
 
 function renderPayBreakdown(elId, saleList){
@@ -842,6 +950,49 @@ async function clearAllSales(){
   await saveSales();
   renderReports();
   showToast('已清除交易紀錄');
+}
+
+/* ---------- excel export ---------- */
+function exportExcel(){
+  if(typeof XLSX === 'undefined'){
+    showToast('匯出功能需要網路連線,請連上網路後再試一次');
+    return;
+  }
+  const salesRows = sales.map(s=>({
+    單號: s.id,
+    時間: new Date(s.time).toLocaleString('zh-TW'),
+    品項: s.items.map(it=>`${it.name}x${it.qty}`).join('、'),
+    小計: s.subtotal,
+    折扣: s.discount,
+    合計: s.total,
+    付款方式: s.payMethod
+  }));
+  const expenseRows = expenses.map(e=>({
+    日期: e.date,
+    項目: e.name,
+    分類: e.cat||'',
+    金額: e.amount
+  }));
+  const totalRevenue = sales.reduce((s,x)=>s+x.total,0);
+  const totalExpense = expenses.reduce((s,x)=>s+x.amount,0);
+  const byPay = {};
+  sales.forEach(s=>{ byPay[s.payMethod] = (byPay[s.payMethod]||0) + s.total; });
+
+  const summaryRows = [
+    {項目:'總營收', 金額: totalRevenue},
+    {項目:'總支出', 金額: totalExpense},
+    {項目:'淨利', 金額: totalRevenue - totalExpense},
+    {項目:'', 金額:''},
+    ...Object.keys(byPay).map(k=>({項目:`${k} 收款`, 金額: byPay[k]}))
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), '摘要');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(salesRows), '收入明細');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(expenseRows), '支出明細');
+
+  const dateStr = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `BrosCoffee_報表_${dateStr}.xlsx`);
 }
 
 /* ---------- sheets ---------- */
