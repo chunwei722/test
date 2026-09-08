@@ -1,6 +1,6 @@
 {
-  "name": "Bros Coffee 收銀台",
-  "short_name": "Bros Coffee",
+  "name": "Meatball Coffee",
+  "short_name": "Meatball Coffee",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
